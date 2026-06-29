@@ -133,7 +133,7 @@ class YNABAPI:
                 timeout=30
             )
 
-            if response.status_code != 200:
+            if response.status_code not in (200, 201):
                 logger.error(f"YNAB returned {response.status_code}: {response.text}")
 
             response.raise_for_status()

@@ -38,6 +38,7 @@ jobs:
           YNAB_SW_ACCOUNT: ${{ secrets.YNAB_SW_ACCOUNT }}
           YNAB_SW_CATEGORY: ${{ secrets.YNAB_SW_CATEGORY }}
           USER_NAME: ${{ secrets.USER_NAME }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
           SYNC_DAYS: ${{ github.event.inputs.sync_days || '15' }}
         run: |
           python main.py --once --days ${{ github.event.inputs.sync_days || '15' }}
