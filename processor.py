@@ -5,7 +5,7 @@ import time
 import re
 import logging
 from decimal import Decimal
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
 
 logger = logging.getLogger('splitwise_ynab_sync')
 
@@ -22,15 +22,28 @@ class TransactionProcessor:
     # Public interface
     # -------------------------------------------------------------------------
 
-    def process_expenses(self, expenses: List[Dict], existing_import_ids: List[str]) -> List[Dict]:
-        """Convert a list of Splitwise expenses into new YNAB transactions."""
+    def process_expenses(self, expenses: List[Dict], existing_import_ids: List[str]) -> Tuple[List[Dict], Dict]:
+        """Convert Splitwise expenses into new YNAB transactions.
+
+        Returns:
+            (transactions, stats) where stats contains counts by type,
+            safe to log without revealing personal information.
+        """
         new_transactions = []
+        stats = {
+            "total": len(expenses),
+            "deleted": 0,
+            "new":       {"repayment": 0, "split": 0, "owed": 0},
+            "duplicate": {"repayment": 0, "split": 0, "owed": 0},
+        }
+
         sorted_expenses = sorted(expenses, key=lambda x: x.get('date', ''), reverse=True)
 
         for expense in sorted_expenses:
             date_str = expense['date'][:10]
 
             if self._is_deleted(expense):
+                stats["deleted"] += 1
                 logger.debug(f'Skipping deleted expense {expense["id"]} ({date_str})')
                 continue
 
@@ -39,22 +52,25 @@ class TransactionProcessor:
                 and expense['created_at'] != expense['updated_at']
             )
 
-            transactions = self._process_expense(expense, existing_import_ids)
-            new_transactions.extend(transactions)
+            transactions, tx_type = self._process_expense(expense, existing_import_ids)
 
             if transactions:
+                new_transactions.extend(transactions)
+                stats["new"][tx_type] += len(transactions)
                 edit_note = " (edited)" if is_edited else ""
-                logger.info(f'New ({date_str}): "{expense["description"]}"{edit_note} → {len(transactions)} transaction(s)')
-            else:
-                logger.debug(f'Skipped ({date_str}): "{expense["description"]}" — already in YNAB')
+                logger.debug(f'New {tx_type}{edit_note} ({date_str}): "{expense["description"]}"')
+            elif tx_type:
+                stats["duplicate"][tx_type] += 1
+                logger.debug(f'Duplicate {tx_type} ({date_str}): "{expense["description"]}" — already in YNAB')
 
-        return new_transactions
+        return new_transactions, stats
 
     # -------------------------------------------------------------------------
     # Expense routing
     # -------------------------------------------------------------------------
 
-    def _process_expense(self, expense: Dict, existing_import_ids: List[str]) -> List[Dict]:
+    def _process_expense(self, expense: Dict, existing_import_ids: List[str]) -> Tuple[List[Dict], str]:
+        """Process a single expense. Returns (transactions, type_string)."""
         expense_id = expense['id']
         transaction_date = (
             expense['created_at'].split('T')[0] if expense.get('created_at')
@@ -63,17 +79,19 @@ class TransactionProcessor:
         description = expense['description']
 
         # If you owe someone (repayment FROM you), always take the repayment path.
-        # This is critical: when the repayment is already in YNAB, _process_repayments
-        # returns [] — without this guard, the code would fall through to
-        # _process_regular_expense and create the same debt with the opposite sign.
+        # Critical: when all repayments are already in YNAB, _process_repayments returns []
+        # (falsy). Without this guard, the code falls through to _process_regular_expense
+        # and creates the same debt with the opposite sign on every subsequent run.
         has_user_repayment = any(
             int(r['from']) == self.user_id
             for r in expense.get('repayments', [])
         )
         if has_user_repayment:
-            return self._process_repayments(expense, expense_id, transaction_date, description, existing_import_ids)
+            txs = self._process_repayments(expense, expense_id, transaction_date, description, existing_import_ids)
+            return txs, "repayment"
 
-        return self._process_regular_expense(expense, expense_id, transaction_date, description, existing_import_ids)
+        txs, tx_type = self._process_regular_expense(expense, expense_id, transaction_date, description, existing_import_ids)
+        return txs, tx_type
 
     def _process_repayments(self, expense: Dict, expense_id: int, date: str, description: str, existing_import_ids: List[str]) -> List[Dict]:
         """Handle expenses where you owe money to someone."""
@@ -84,8 +102,7 @@ class TransactionProcessor:
 
             import_id = self._repayment_import_id(expense_id, int(repayment['to']))
             if not self.allow_duplicates and import_id in existing_import_ids:
-                to_name = self._find_user_name(expense['users'], int(repayment['to']))
-                logger.info(f'Duplicate repayment for expense {expense_id} to {to_name} — skipping')
+                logger.debug(f'Duplicate repayment {expense_id} → already in YNAB')
                 continue
 
             to_name = self._find_user_name(expense['users'], int(repayment['to']))
@@ -93,26 +110,26 @@ class TransactionProcessor:
 
         return transactions
 
-    def _process_regular_expense(self, expense: Dict, expense_id: int, date: str, description: str, existing_import_ids: List[str]) -> List[Dict]:
+    def _process_regular_expense(self, expense: Dict, expense_id: int, date: str, description: str, existing_import_ids: List[str]) -> Tuple[List[Dict], str]:
         """Handle expenses where you paid for others, or others paid for you."""
         user_data = self._get_user_data(expense['users'])
 
         if user_data['paid_share'] > 0:
             import_id = self._import_id(expense_id, "split")
             if not self.allow_duplicates and import_id in existing_import_ids:
-                logger.info(f'Duplicate split for expense {expense_id} — skipping')
-                return []
-            return [self._make_split(expense_id, date, description, user_data)]
+                logger.debug(f'Duplicate split {expense_id} → already in YNAB')
+                return [], "split"
+            return [self._make_split(expense_id, date, description, user_data)], "split"
 
         if user_data['owed_share'] != 0:
             import_id = self._import_id(expense_id, "exp")
             if not self.allow_duplicates and import_id in existing_import_ids:
-                logger.info(f'Duplicate owed for expense {expense_id} — skipping')
-                return []
+                logger.debug(f'Duplicate owed {expense_id} → already in YNAB')
+                return [], "owed"
             paid_by = self._find_payer(expense['users'])
-            return [self._make_owed(expense_id, date, description, user_data['owed_share'], paid_by)]
+            return [self._make_owed(expense_id, date, description, user_data['owed_share'], paid_by)], "owed"
 
-        return []
+        return [], ""
 
     # -------------------------------------------------------------------------
     # Transaction builders
@@ -124,7 +141,7 @@ class TransactionProcessor:
         return {
             "import_id": import_id,
             "date": date,
-            "amount": -milliunits,  # negative = outflow
+            "amount": -milliunits,
             "memo": f"{description}, settlement to {paid_to} ({formatted})",
             "cleared": "cleared"
         }
@@ -137,7 +154,7 @@ class TransactionProcessor:
         return {
             "import_id": self._import_id(expense_id, "split"),
             "date": date,
-            "amount": milliunits,  # positive = inflow
+            "amount": milliunits,
             "memo": memo,
             "cleared": "cleared"
         }
@@ -149,7 +166,7 @@ class TransactionProcessor:
         return {
             "import_id": self._import_id(expense_id, "exp"),
             "date": date,
-            "amount": milliunits,  # positive = inflow (debt owed)
+            "amount": milliunits,
             "memo": f"{description}, paid by {paid_by}, {self.user_name} {verb} {formatted}",
             "cleared": "cleared"
         }
@@ -190,7 +207,6 @@ class TransactionProcessor:
         return "someone"
 
     def _to_milliunits(self, amount: Any) -> tuple[int, str]:
-        """Convert an amount to YNAB milliunits and a formatted string."""
         if isinstance(amount, (int, float)):
             milliunits = int(Decimal(str(amount)) * 1000)
             formatted = f'{float(amount):.2f}'
@@ -201,7 +217,6 @@ class TransactionProcessor:
         return milliunits, formatted
 
     def _import_id(self, expense_id: int, tx_type: str) -> str:
-        """Stable import ID for deduplication (max 36 chars for YNAB)."""
         base = f"{expense_id}_{tx_type}" if not self.allow_duplicates else f"{expense_id}_{tx_type}_{int(time.time())}"
         if len(base) <= 36:
             return base
@@ -209,7 +224,6 @@ class TransactionProcessor:
         return f"{expense_id}_{tx_type[:4]}_{suffix}"
 
     def _repayment_import_id(self, expense_id: int, to_user_id: int) -> str:
-        """Stable import ID for repayment transactions (max 36 chars for YNAB)."""
         base = f"{expense_id}_repay_{to_user_id}" if not self.allow_duplicates else f"{expense_id}_repay_{to_user_id}_{int(time.time())}"
         if len(base) <= 36:
             return base
