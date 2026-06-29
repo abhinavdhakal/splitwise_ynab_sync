@@ -13,10 +13,10 @@ class Config:
     """Centralized configuration management."""
     
     # Splitwise API Configuration
-    SW_API_KEY: str = os.getenv('SW_API_KEY') or os.getenv('SPLITWISE_API_KEY', '')
-    
-    # YNAB API Configuration  
-    YNAB_TOKEN: str = os.getenv('YNAB_TOKEN', '')
+    SW_API_KEY: str = (os.getenv('SW_API_KEY') or os.getenv('SPLITWISE_API_KEY', '')).strip()
+
+    # YNAB API Configuration
+    YNAB_TOKEN: str = os.getenv('YNAB_TOKEN', '').strip()
     YNAB_BUDGET: str = os.getenv('YNAB_BUDGET') or os.getenv('YNAB_BUDGET_NAME', 'last-used')
     YNAB_SW_ACCOUNT: str = os.getenv('YNAB_SW_ACCOUNT') or os.getenv('YNAB_ACCOUNT_NAME', 'Splitwise')
     YNAB_SW_CATEGORY: str = os.getenv('YNAB_SW_CATEGORY', 'Splitwise')
