@@ -153,6 +153,9 @@ config.json
 secrets.txt
 api_keys.txt
 
+# Data exports — never commit these
+*.csv
+
 # Logs
 *.log
 logs/

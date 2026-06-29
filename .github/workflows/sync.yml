@@ -1,17 +1,15 @@
 name: Splitwise YNAB Sync
 
 on:
-  # Scheduled run every 12 hours (at 6 AM and 6 PM UTC)
   schedule:
-    - cron: "0 6,18 * * *"
+    - cron: "0 6 * * *"  # Every day at 6 AM UTC
 
-  # Manual trigger option
   workflow_dispatch:
     inputs:
       sync_days:
         description: "Number of days to sync (default: 15)"
         required: false
-        default: "3"
+        default: "15"
         type: string
 
 jobs:
@@ -23,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -32,19 +30,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Splitwise YNAB Sync
+      - name: Run sync
         env:
-          SPLITWISE_API_KEY: ${{ secrets.SPLITWISE_API_KEY }}
+          SW_API_KEY: ${{ secrets.SW_API_KEY }}
           YNAB_TOKEN: ${{ secrets.YNAB_TOKEN }}
-          YNAB_BUDGET_NAME: ${{ secrets.YNAB_BUDGET_NAME }}
-          YNAB_ACCOUNT_NAME: ${{ secrets.YNAB_ACCOUNT_NAME }}
+          YNAB_BUDGET: ${{ secrets.YNAB_BUDGET }}
+          YNAB_SW_ACCOUNT: ${{ secrets.YNAB_SW_ACCOUNT }}
+          YNAB_SW_CATEGORY: ${{ secrets.YNAB_SW_CATEGORY }}
+          USER_NAME: ${{ secrets.USER_NAME }}
           SYNC_DAYS: ${{ github.event.inputs.sync_days || '15' }}
         run: |
-          python splitwise_ynab_sync.py --once --days ${{ github.event.inputs.sync_days || '15' }}
+          python main.py --once --days ${{ github.event.inputs.sync_days || '15' }}
 
-      - name: Upload logs (on failure)
+      - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sync-logs
           path: "*.log"
