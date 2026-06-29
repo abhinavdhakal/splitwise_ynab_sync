@@ -47,6 +47,7 @@ Add these secrets:
 | `YNAB_SW_ACCOUNT` | The tracking account name in YNAB (e.g. `Splitwise`) |
 | `YNAB_SW_CATEGORY` | The category name in YNAB (e.g. `Splitwise`) |
 | `USER_NAME` | Your first name (appears in transaction memos) |
+| `LOG_LEVEL` | `INFO` — shows stats without personal data (use `DEBUG` locally, `WARNING` for silent) |
 
 ### 5. Enable Actions and run
 
@@ -110,4 +111,15 @@ python main.py                   # run continuously (every 15 min)
 | `USER_NAME` | `you` | Your name (used in memos) |
 | `SYNC_DAYS` | `15` | Days back to look for expenses |
 | `POLL_INTERVAL` | `15` | Minutes between syncs (continuous mode) |
+| `LOG_LEVEL` | `INFO` | Logging verbosity: `INFO` shows counts/stats only, `DEBUG` shows full detail (names, memos), `WARNING` shows errors only |
 | `ALLOW_DUPLICATES` | `false` | Set to `true` only if you've manually deleted transactions and need to re-import |
+
+### Log level guide
+
+| Level | What you see | Good for |
+|---|---|---|
+| `WARNING` | Errors only | Fully silent unless something breaks |
+| `INFO` | Count/type summaries, no personal data | GitHub Actions (public repos) |
+| `DEBUG` | Full detail — names, memos, amounts | Local troubleshooting |
+
+Set `LOG_LEVEL` as a GitHub secret to `INFO` to get useful stats in your Actions logs without exposing transaction details.
